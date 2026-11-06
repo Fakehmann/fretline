@@ -184,7 +184,7 @@ const LIB = {
   D:["xx0232","000132"], Dm:["xx0231","000231"], D7:["xx0212","000213"], Dm7:["xx0211","000211"], Dmaj7:["xx0222","000111"], Dsus2:["xx0230","000130"], Dsus4:["xx0233","000134"],
   E:["022100","023100"], Em:["022000","023000"], E7:["020100","020100"], Em7:["022030","012040"], Esus4:["022200","023400"],
   F:["133211","134211"], Fmaj7:["xx3210","003210"],
-  G:["320003","210003"], G7:["320001","320001"],
+  G:["320003","210003"], G7:["320001","320001"], Gsus4:["330013","230014"],
   A:["x02220","001230"], Am:["x02210","002310"], A7:["x02020","002030"], Am7:["x02010","002010"], Amaj7:["x02120","002130"], Asus2:["x02200","001200"], Asus4:["x02230","001230"],
   B7:["x21202","021304"], Bm:["x24432","013421"]
 };
@@ -364,6 +364,40 @@ const SONGS = [
 | Am | C | D | F |
 | Am | E | Am | E |`}
 ];
+/* Songs added for this player. Chords only, so they appear on every device. */
+const YOUR_SONGS = [
+ {id:"kiss-me", title:"Kiss Me", by:"Sixpence None the Richer", beats:4, bpm:100, key:"Eb", capo:3, draft:true,
+  link:"https://www.youtube.com/watch?v=wkthRsneAXA", linkText:"Watch the video lesson",
+  note:"If the F barre is hard for now, play Fmaj7 instead.",
+  chart:`[Intro]
+| C | Cmaj7 | C7 | Cmaj7 |
+| C | Cmaj7 | C7 | Cmaj7 |
+[Verse 1]
+| C | Cmaj7 | C7 | Cmaj7 |
+| C | Cmaj7 | C7 | F |
+[Chorus]
+| Dm | G | C | C |
+| Dm | G | C | C7 |
+| Dm | G | C G | Am G |
+| F | G | Gsus4 | G |
+[Instrumental]
+| C | Cmaj7 | C7 | Cmaj7 |
+[Verse 2]
+| C | Cmaj7 | C7 | Cmaj7 |
+| C | Cmaj7 | C7 | F |
+[Interlude]
+| C | Cmaj7 | C7 | Cmaj7 |
+| Dm7 | G7 | C | Am |
+| Dm7 | G7 | C | C7 |
+[Final chorus]
+| Dm | G | C | C |
+| Dm | G | C | C7 |
+| Dm | G | C G | Am G |
+| F | G | Gsus4 | G |
+[Outro]
+| C | Cmaj7 | C7 | Cmaj7 |
+| C | Cmaj7 | C7 | Cmaj7 |`}
+];
 function parseChart(text) {
   const sections = []; let sec = null, line = null;
   const lines = String(text).split(/\r?\n/);
@@ -398,7 +432,7 @@ function songChords(song, by=0) {
   for (const s of parseChart(song.chart)) for (const l of s.lines) for (const b of l.bars) for (const c of b) { const n = transposeName(c, by); if (!set.includes(n)) set.push(n); }
   return set;
 }
-function allSongs() { return [...S.songs, ...SONGS]; }
+function allSongs() { return [...YOUR_SONGS, ...S.songs, ...SONGS]; }
 
 /* ───────── State ───────── */
 const DEFAULTS = {done:{}, known:{}, best:{}, learned:{}, songs:[], prefs:{}, songPrefs:{}, view:"neck", lefty:false, a4:440, tuning:"standard", updatedAt:0};
@@ -453,6 +487,7 @@ const isKnown = n => {
 const nextLesson = () => LESSONS.find(l => !S.done[l.id]);
 
 /* ───────── Audio ───────── */
+let soundCapo = 0; /* semitones added on a song page that uses a capo, so the sound matches the recording */
 const Audio_ = {
   ctx:null, bufs:{},
   get() {
@@ -483,7 +518,7 @@ const Audio_ = {
     const ctx = this.get(), t = when || ctx.currentTime;
     const idx = [0,1,2,3,4,5].filter(i => c.frets[i] >= 0);
     if (dir === "U") idx.reverse();
-    idx.forEach((s,k) => this.pluck(midiFreq(OPEN_MIDI[s]+c.frets[s]), t+k*.016, gain*(dir==="U"?.75:1)));
+    idx.forEach((s,k) => this.pluck(midiFreq(OPEN_MIDI[s]+c.frets[s]+soundCapo), t+k*.016, gain*(dir==="U"?.75:1)));
   },
   click(when, accent) {
     const ctx = this.get(), o = ctx.createOscillator(), g = ctx.createGain();
@@ -746,7 +781,7 @@ function songsView() {
   if (UI.song) { const s = allSongs().find(x => x.id===UI.song); if (s) return playerView(s); UI.song = null; }
   return `<div class="head-row"><header class="stack"><h1>Songs</h1><p class="muted">Your songs, plus a starter set of public-domain tunes.</p></header>
     <button class="primary" data-act="new-song">Add a song</button></div>
-  ${S.songs.length ? `<section class="stack"><h2>Your songs</h2>${S.songs.map(songCard).join("")}</section>` : `<section class="panel"><h3>Which songs do you want to learn?</h3><p class="muted">Add any song by pasting its chords, and it gets the same diagrams and play-along as the songs below.</p></section>`}
+  <section class="stack"><h2>Your songs</h2>${[...YOUR_SONGS, ...S.songs].map(songCard).join("")}</section>
   <section class="stack"><h2>Starter songs</h2>${SONGS.map(songCard).join("")}</section>`;
 }
 const CHART_HELP = `[Verse]
@@ -794,13 +829,16 @@ function flatten(sections, by) {
 function playerView(s) {
   const p = songPref(s), sections = parseChart(s.chart), bars = flatten(sections, p.transpose);
   const first = bars[0], chords = songChords(s, p.transpose);
+  soundCapo = +s.capo || 0;
   let bi = 0;
   const map = sections.map((sec,si) => `<div class="stack" style="gap:6px"><div class="row between"><h3>${esc(sec.name)}</h3>${sections.length>1?`<button class="${p.loop===si?"on":"ghost"}" style="min-height:36px;padding:6px 10px;font-size:.82rem" data-act="song-loop" data-v="${si}">${p.loop===si?"Looping":"Loop this"}</button>`:""}</div>
     ${sec.lines.map(ln => `<div class="stack" style="gap:3px"><div class="barline">${ln.bars.map(b => { const n = bi++; return `<button class="bar" id="bar-${n}" data-act="song-seek" data-v="${n}">${b.map(c => esc(transposeName(c,p.transpose))).join(" ")}</button>`; }).join("")}</div>${ln.lyric?`<div class="small muted">${esc(ln.lyric)}</div>`:""}</div>`).join("")}</div>`).join("");
   const c0 = getChord(first.chords[0]), nextName = bars[1] ? bars[1].chords[0] : first.chords[0], c1 = getChord(nextName);
   return `<div><button class="link" data-act="close-song">← All songs</button></div>
   <header class="stack" style="gap:4px"><h1>${esc(s.title)}</h1><p class="muted">${esc(s.by||"")}${s.capo?` · Capo fret ${esc(s.capo)}`:""}${s.draft?" · Draft chart: check it against the recording":""}</p></header>
+  ${s.capo?`<div class="notice">Put a capo on fret ${esc(s.capo)}. Fret numbers in the diagrams count up from the capo, and the guide guitar sounds as if it has one too.</div>`:""}
   ${s.note?`<p class="small muted">${esc(s.note)}</p>`:""}
+  ${s.link?`<p class="small"><a href="${esc(s.link)}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">${esc(s.linkText||"Open the song link")}</a></p>`:""}
   <section class="panel"><div class="eyebrow">Chords in this song</div>
     <div class="row">${chords.map(c => `<button class="chip ${isKnown(c)?"known":"need"}" style="min-height:36px" data-act="song-chord" data-c="${esc(c)}">${esc(c)}</button>`).join("")}</div>
     ${UI.songChord && chords.includes(UI.songChord) ? studyHTML(UI.songChord) : `<p class="small muted">Tap a chord to see how to play it. Dashed chords are ones you haven't marked as learned.</p>`}
@@ -1034,6 +1072,7 @@ function render() {
   document.querySelectorAll("#nav button").forEach(b => { const on = b.dataset.tab===UI.tab; b.classList.toggle("on", on); on ? b.setAttribute("aria-current","page") : b.removeAttribute("aria-current"); });
   const v = $("#view");
   let html = "";
+  soundCapo = 0;
   if (UI.tab==="learn") { const l = LESSONS.find(x => x.id===UI.lesson); html = l ? lessonView(l) : learnHome(); }
   if (UI.tab==="chords") html = chordsView();
   if (UI.tab==="songs") html = songsView();
@@ -1063,7 +1102,7 @@ const ACT = {
   "step-start": d => { UI.reveal[d.c] = 0; refreshStudy(); },
   "step-next": d => { UI.reveal[d.c] = (UI.reveal[d.c]||0)+1; const c = getChord(d.c); refreshStudy(); if (UI.reveal[d.c] >= fingerSteps(c).length) Audio_.strum(c); },
   strum: d => { const c = getChord(d.c); if (c) Audio_.strum(c); },
-  str: d => { const c = getChord(d.c), s = +d.s; if (c && c.frets[s] >= 0) Audio_.pluck(midiFreq(OPEN_MIDI[s]+c.frets[s])); },
+  str: d => { const c = getChord(d.c), s = +d.s; if (c && c.frets[s] >= 0) Audio_.pluck(midiFreq(OPEN_MIDI[s]+c.frets[s]+soundCapo)); },
   know: d => { if (isKnown(d.c)) S.known[d.c] = false; else S.known[d.c] = true; save(); refreshStudy(); },
   "drill-open": d => { stopAll(); const p = d.k.split("-"); UI.drill = {key:d.k, target:+d.t, bpm:Math.max(24,Math.min(160,((S.best[d.k]||8)+2)*4)), running:false, left:60, active:0, result:false}; render(); document.getElementById("drill")?.scrollIntoView({block:"nearest"}); },
   "drill-toggle": () => { if (UI.drill.running) { stopAll(); UI.drill.running = false; render(); } else startDrill(); },

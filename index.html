@@ -493,7 +493,8 @@ const Audio_ = {
   get() {
     if (!this.ctx) { const C = window.AudioContext || window.webkitAudioContext; this.ctx = new C(); }
     if (this.ctx.state === "suspended") this.ctx.resume();
-    try { if (navigator.audioSession && !Tuner.on) navigator.audioSession.type = "playback"; } catch (e) {}
+    /* "playback" keeps sound on in Silent Mode, but must never be set while the mic is starting or running */
+    try { if (navigator.audioSession && !Tuner.on && !Tuner.starting) navigator.audioSession.type = "playback"; } catch (e) {}
     return this.ctx;
   },
   buffer(N, sr) {
@@ -980,39 +981,69 @@ const Tuner = {on:false, err:"", stream:null, src:null, an:null, buf:null, timer
   tuning() { return TUNINGS[S.tuning] || TUNINGS.standard; },
   async start() {
     this.err = "";
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { this.err = this.blockedMsg(); render(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { this.err = this.micMsg({name:"NoMicApi"}); render(); return; }
+    this.starting = true;
     try {
-      try { if (navigator.audioSession) navigator.audioSession.type = "play-and-record"; } catch (e) {}
+      try { if (navigator.audioSession) navigator.audioSession.type = "auto"; } catch (e) {}
       const ctx = Audio_.get();
-      this.stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+      const gum = c => navigator.mediaDevices.getUserMedia(c);
+      try { this.stream = await gum({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}}); }
+      catch (e) { if (e && (e.name==="OverconstrainedError" || e.name==="TypeError")) this.stream = await gum({audio:true}); else throw e; }
+      /* iPhone can pause audio while the permission prompt is open */
+      if (ctx.state !== "running") await Promise.race([ctx.resume().catch(() => {}), new Promise(r => setTimeout(r, 800))]);
       this.src = ctx.createMediaStreamSource(this.stream);
       this.an = ctx.createAnalyser(); this.an.fftSize = 4096; this.an.smoothingTimeConstant = 0;
       this.src.connect(this.an);
+      /* Safari only runs nodes that reach the output, so feed it through a silent gain */
+      this.sink = ctx.createGain(); this.sink.gain.value = 0;
+      this.an.connect(this.sink); this.sink.connect(ctx.destination);
       this.buf = new Float32Array(this.an.fftSize);
-      this.on = true; this.hist = []; this.good = 0;
+      this.on = true; this.hist = []; this.good = 0; this.silent = 0;
+      this.stream.getAudioTracks().forEach(t => { t.onended = () => { if (this.on) { this.err = "The microphone stopped, possibly because of a call or another app. Tap Listen with microphone to start it again."; this.stop(); } }; });
       keepAwake(true);
+      this.starting = false;
       render();
       this.timer = setInterval(() => this.read(), 60);
-    } catch (e) { this.err = this.blockedMsg(); this.stop(true); render(); }
+    } catch (e) { this.starting = false; this.err = this.micMsg(e); this.stop(true); render(); }
   },
-  blockedMsg() {
+  micMsg(e) {
+    const name = (e && e.name) || "UnknownError";
     if (window.self !== window.top) return "This link can't use the microphone, because Claude's hosted pages block it. Tune by ear with the tones below, or use your installed copy of Fretline.";
     if (!window.isSecureContext) return "Browsers only allow the microphone on secure (https) pages. Open Fretline from its https address, or tune by ear with the tones below.";
-    return "The microphone is blocked. On iPhone, open Settings > Safari > Microphone and allow it, then try again. You can also tune by ear below.";
+    const homeScreen = navigator.standalone === true || (window.matchMedia && matchMedia("(display-mode: standalone)").matches);
+    let msg;
+    if (name === "NotAllowedError") msg = homeScreen
+      ? "iPhone refused the microphone for the Home Screen app. Open fakehmann.github.io/fretline in Safari and try there. If it works in Safari, delete the Home Screen icon and add it again."
+      : "This page was refused the microphone. In Safari, tap the page menu beside the address bar, choose Website Settings, set Microphone to Allow, then reload and try again.";
+    else if (name === "NotFoundError") msg = "No microphone was found. Unplug any headphones or adapter and try again.";
+    else if (name === "NotReadableError" || name === "AbortError") msg = "The microphone is busy. End any call, close apps that record audio, then try again.";
+    else if (name === "NoMicApi") msg = "This browser doesn't offer microphone access here. Open fakehmann.github.io/fretline in Safari and try there.";
+    else msg = "The microphone couldn't start. Close and reopen the app, then try again.";
+    return `${msg} You can still tune by ear below. (Error: ${name})`;
   },
   stop(quiet) {
-    clearInterval(this.timer); this.on = false;
-    try { this.stream && this.stream.getTracks().forEach(t => t.stop()); this.src && this.src.disconnect(); } catch (e) {}
-    this.stream = this.src = this.an = null;
+    clearInterval(this.timer); this.on = false; this.starting = false;
+    try { this.stream && this.stream.getTracks().forEach(t => { t.onended = null; t.stop(); }); this.src && this.src.disconnect(); this.an && this.an.disconnect(); this.sink && this.sink.disconnect(); } catch (e) {}
+    this.stream = this.src = this.an = this.sink = null;
     keepAwake(false);
     if (!quiet && UI.tab==="tune") render();
   },
   read() {
     if (!this.an) return;
+    const ctx = Audio_.ctx;
+    if (ctx.state !== "running") ctx.resume().catch(() => {});
     this.an.getFloatTimeDomainData(this.buf);
     let rms = 0; for (let i = 0; i < this.buf.length; i++) rms += this.buf[i]*this.buf[i];
     rms = Math.sqrt(rms/this.buf.length);
-    if (rms < .004) { this.show(null); return; }
+    const level = $("#g-level");
+    if (level) level.style.width = Math.min(100, Math.sqrt(rms)*220).toFixed(0)+"%";
+    this.silent = rms < 1e-6 ? (this.silent||0)+1 : 0;
+    if (this.silent > 50) {
+      const st = $("#g-state");
+      if (st) { st.textContent = "The mic is connected but sending no sound. Close other apps using it, then stop and start again."; st.className = "tstate"; }
+      return;
+    }
+    if (rms < .002) { this.show(null); return; }
     const r = yin(this.buf, Audio_.ctx.sampleRate);
     if (!r || r.clarity < .8 || r.freq < 60 || r.freq > 700) { this.show(null); return; }
     this.hist.push(r.freq); if (this.hist.length > 5) this.hist.shift();
@@ -1054,7 +1085,8 @@ function tunerView() {
        <g id="g-needle"><line x1="150" y1="150" x2="150" y2="36" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/><circle cx="150" cy="150" r="7" fill="var(--accent)"/></g></svg>
       <div class="gauge-note" id="g-note">${NOTES[T.m[Tuner.locked??0]%12]}</div>
       <div class="tstate" id="g-state" role="status">Pluck one string</div>
-      <div class="small muted mono" id="g-hz" style="text-align:center">–</div>` : ""}
+      <div class="small muted mono" id="g-hz" style="text-align:center">–</div>
+      <div class="stack" style="gap:4px"><span class="small muted">Mic level: this bar should jump when you pluck</span><div class="progress" aria-hidden="true"><i id="g-level" style="width:0"></i></div></div>` : ""}
     ${Tuner.err ? `<div class="notice" role="alert">${esc(Tuner.err)}${window.self !== window.top ? ` <a href="https://fakehmann.github.io/fretline/#tune" target="_blank" rel="noopener" style="color:inherit;font-weight:700">Open the live tuner</a>` : ""}</div>` : ""}
     <div class="row"><button class="${Tuner.on?"":"primary"}" data-act="tuner-toggle">${Tuner.on?"Stop listening":"Listen with microphone"}</button></div>
   </section>

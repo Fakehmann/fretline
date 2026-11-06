@@ -958,7 +958,7 @@ const Tuner = {on:false, err:"", stream:null, src:null, an:null, buf:null, timer
     } catch (e) { this.err = this.blockedMsg(); this.stop(true); render(); }
   },
   blockedMsg() {
-    if (window.self !== window.top) return "This link can't use the microphone, because Claude's hosted pages block it. Tune by ear with the tones below, or open your own installed copy of Fretline for the live tuner.";
+    if (window.self !== window.top) return "This link can't use the microphone, because Claude's hosted pages block it. Tune by ear with the tones below, or use your installed copy of Fretline.";
     if (!window.isSecureContext) return "Browsers only allow the microphone on secure (https) pages. Open Fretline from its https address, or tune by ear with the tones below.";
     return "The microphone is blocked. On iPhone, open Settings > Safari > Microphone and allow it, then try again. You can also tune by ear below.";
   },
@@ -1017,7 +1017,7 @@ function tunerView() {
       <div class="gauge-note" id="g-note">${NOTES[T.m[Tuner.locked??0]%12]}</div>
       <div class="tstate" id="g-state" role="status">Pluck one string</div>
       <div class="small muted mono" id="g-hz" style="text-align:center">–</div>` : ""}
-    ${Tuner.err ? `<div class="notice" role="alert">${esc(Tuner.err)}</div>` : ""}
+    ${Tuner.err ? `<div class="notice" role="alert">${esc(Tuner.err)}${window.self !== window.top ? ` <a href="https://fakehmann.github.io/fretline/#tune" target="_blank" rel="noopener" style="color:inherit;font-weight:700">Open the live tuner</a>` : ""}</div>` : ""}
     <div class="row"><button class="${Tuner.on?"":"primary"}" data-act="tuner-toggle">${Tuner.on?"Stop listening":"Listen with microphone"}</button></div>
   </section>
   <section class="panel">
